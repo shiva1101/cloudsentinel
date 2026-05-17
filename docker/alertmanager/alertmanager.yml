@@ -1,0 +1,70 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "smtp.gmail.com:587"
+  smtp_from: "cloudsentinel-alerts@example.com"
+  smtp_auth_username: "${SMTP_USER}"
+  smtp_auth_password: "${SMTP_PASSWORD}"
+
+# ── Routing Tree ──────────────────────────────────────────────────────────────
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: "default"
+
+  routes:
+    # Critical alerts → PagerDuty (or email)
+    - match:
+        severity: critical
+      receiver: "critical-alerts"
+      continue: true
+
+    # Warning alerts → Slack
+    - match:
+        severity: warning
+      receiver: "warning-alerts"
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+  - name: "default"
+    email_configs:
+      - to: "devops-team@example.com"
+        send_resolved: true
+        subject: "[CloudSentinel] {{ .GroupLabels.alertname }}"
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          {{ end }}
+
+  - name: "critical-alerts"
+    email_configs:
+      - to: "oncall@example.com"
+        send_resolved: true
+        subject: "🔥 [CRITICAL] {{ .GroupLabels.alertname }}"
+    # Uncomment and configure for Slack/PagerDuty:
+    # slack_configs:
+    #   - api_url: "${SLACK_WEBHOOK_URL}"
+    #     channel: "#alerts-critical"
+    #     title: "🔥 Critical Alert: {{ .GroupLabels.alertname }}"
+    #     text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+
+  - name: "warning-alerts"
+    email_configs:
+      - to: "devops-team@example.com"
+        send_resolved: true
+        subject: "⚠️ [WARNING] {{ .GroupLabels.alertname }}"
+    # slack_configs:
+    #   - api_url: "${SLACK_WEBHOOK_URL}"
+    #     channel: "#alerts-warning"
+
+# ── Inhibition Rules ──────────────────────────────────────────────────────────
+inhibit_rules:
+  # If app is completely down, suppress latency/error-rate alerts
+  - source_match:
+      alertname: "AppDown"
+    target_match_re:
+      alertname: "HighErrorRate|HighResponseLatency"
+    equal: ["instance"]
